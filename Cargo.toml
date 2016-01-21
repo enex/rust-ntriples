@@ -2,3 +2,6 @@
 name = "ntriples"
 version = "0.1.0"
 authors = ["Simon Vetter <sive@web.de>"]
+
+[dependencies]
+nom = "1.1.0"
