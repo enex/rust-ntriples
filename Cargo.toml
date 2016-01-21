@@ -1,0 +1,4 @@
+[package]
+name = "ntriples"
+version = "0.1.0"
+authors = ["Simon Vetter <sive@web.de>"]
