@@ -1,25 +1,45 @@
 #[macro_use]
 extern crate nom;
 
-use nom::{IResult,digit};
-use nom::IResult::*;
+use nom::{IResult, alpha, alphanumeric};
 
-use std::str;
-use std::str::FromStr;
 
-fn is_absolutUriChar(c: u8) -> bool{
-    c != b' '
+fn is_absolute_uri_char(c: u8) -> bool{
+    c != b'>'
 }
 
-named!(absoluteUri, take_while!(is_absolutUriChar));
+named!(absolute_uri, take_while!(is_absolute_uri_char));
 
 named!(pub uriref <&[u8]>, chain!(
         char!('<') ~
-        uri: absoluteUri ~
+        uri: absolute_uri ~
         char!('>'),
         ||{
             uri
         }
+    )
+);
+
+fn is_no_newline(b: u8) -> bool{
+    match b{
+        b'\n' => false,
+        _ => true
+    }
+}
+
+named!(pub comment <&[u8]>,
+    preceded!(
+        tag!("#"),
+        take_while!(is_no_newline)
+    )
+);
+
+named!(name, call!(alphanumeric));
+
+named!(pub named_node <&[u8]>,
+    preceded!(
+        tag!("_:"),
+        name
     )
 );
 
@@ -45,11 +65,23 @@ pub struct Triple{
 #[test]
 fn it_works() {
     assert_eq!(
-        absoluteUri(b"http://test"),
+        absolute_uri(b"http://test"),
         IResult::Done(&b""[..],&b"http://test"[..])
-    );/*
+    );
     assert_eq!(
         uriref(b"<http://test>"),
-        IResult::Done(b"",b"http://test".to_string())
-    );*/
+        IResult::Done(&b""[..],&b"http://test"[..])
+    );
+    assert_eq!(
+        comment(b"#test wie das geht \n"),
+        IResult::Done(&b"\n"[..],&b"test wie das geht "[..])
+    );
+    assert_eq!(
+        name(b"Der92Name"),
+        IResult::Done(&b""[..],&b"Der92Name"[..])
+    );
+    assert_eq!(
+        named_node(b"_:name4Node"),
+        IResult::Done(&b""[..],&b"name4Node"[..])
+    );
 }
