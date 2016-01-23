@@ -8,6 +8,30 @@ use std::str::from_utf8;
 
 pub type MyTriple<'a> = rdf_traits::Triple<Subject<'a>, Predicate<'a>, Object<'a>>;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Subject<'a>{
+    AbsoluteUri(&'a str),
+    NamedNode(&'a str)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Predicate<'a>{
+    AbsoluteUri(& 'a str)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Object<'a>{
+    AbsoluteUri(& 'a str),
+    NamedNode(& 'a str),
+    Literal{
+        value: & 'a str,
+        datatype: & 'a str,
+        language: &'a str
+    }
+}
+
+
+
 fn is_absolute_uri_char(c: u8) -> bool{
     c != b'>'
 }
@@ -17,7 +41,7 @@ named!(absolute_uri<&str>, map_res!(
     from_utf8
 ));
 
-named!(pub uriref <&str>, chain!(
+named!(pub iriref <&str>, chain!(
         char!('<') ~
         uri: absolute_uri ~
         char!('>'),
@@ -44,9 +68,7 @@ fn eof(input:&[u8]) -> IResult<&[u8], &[u8]> {
     }
 }
 
-named!(eol,
-       alt!(tag!("\r\n") | tag!("\n") | tag!("\u{2028}") | tag!("\u{2029}")));
-
+named!(eol, alt!(tag!("\r\n") | tag!("\n") | tag!("\u{2028}") | tag!("\u{2029}")));
 
 named!(name, call!(alphanumeric));
 
@@ -58,26 +80,55 @@ named!(pub named_node <&str>,
 );
 
 named!(subject<Subject>, alt!(
-    uriref => { |res| Subject::AbsoluteUri(res)  } |
+    iriref => { |res| Subject::AbsoluteUri(res)  } |
     named_node => { |res| Subject::NamedNode(res) }
 ));
 
 named!(predicate<Predicate>, map!(
-    uriref,
+    iriref,
     |o| Predicate::AbsoluteUri(o)
 ));
 
-named!(literal<&str>, chain!(
+named!(literal_value<&str>, chain!(
     char!('"') ~
     d: take_until!([b'"']) ~
     char!('"'),
     ||{ from_utf8(d).unwrap() }
 ));
 
+named!(language_tag<&str>,
+    map_res!(preceded!(
+        tag!("@"),
+        name
+    ), from_utf8)
+);
+
+named!(literal_type<&str>,
+    preceded!(
+        tag!("^^"),
+        iriref
+    )
+);
+
+named!(literal<Object>, chain!(
+    value: literal_value ~
+    add: alt!(
+        eof => { |_| ("","") } |
+        language_tag => { |res| (res, "") } |
+        literal_type => { |res| ("", res) }
+    ) ,
+
+    ||{ Object::Literal{
+        value:    value,
+        datatype: add.1,
+        language: add.0
+    } }
+));
+
 named!(pub object<Object>, alt!(
-    uriref => { |res| Object::AbsoluteUri(res) } |
+    iriref => { |res| Object::AbsoluteUri(res) } |
     named_node => { |res| Object::NamedNode(res) } |
-    literal => { |res| Object::Literal(res) }
+    literal => { |res| res }
 ));
 
 named!(ws, map!(many1!(
@@ -99,24 +150,6 @@ named!(pub triple<MyTriple>, chain!(
     ||{ MyTriple::new(s, p, o) }
 ));
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Subject<'a>{
-    AbsoluteUri(&'a str),
-    NamedNode(&'a str)
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Predicate<'a>{
-    AbsoluteUri(& 'a str)
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Object<'a>{
-    AbsoluteUri(& 'a str),
-    NamedNode(& 'a str),
-    Literal(& 'a str)
-}
-
 #[test]
 fn it_works() {
     assert_eq!(
@@ -124,7 +157,7 @@ fn it_works() {
         IResult::Done(&b""[..],"http://test")
     );
     assert_eq!(
-        uriref(b"<http://test>"),
+        iriref(b"<http://test>"),
         IResult::Done(&b""[..],"http://test")
     );
     assert_eq!(
@@ -162,9 +195,9 @@ fn test_predicate(){
 }
 
 #[test]
-fn test_literal(){
+fn test_literal_value(){
     assert_eq!(
-        literal(b"\"Hallo Welt\""),
+        literal_value(b"\"Hallo Welt\""),
         IResult::Done(&b""[..], "Hallo Welt")
     );
 }
@@ -181,7 +214,15 @@ fn test_object(){
     );
     assert_eq!(
         object(&b"\"Hallo Welt\""[..]),
-        IResult::Done(&b""[..],Object::Literal("Hallo Welt"))
+        IResult::Done(&b""[..],Object::Literal{value:"Hallo Welt", datatype:"", language:""})
+    );
+    assert_eq!(
+        object(&b"\"That Seventies Show\"@en"[..]),
+        IResult::Done(&b""[..],Object::Literal{value:"That Seventies Show", datatype:"", language:"en"})
+    );
+    assert_eq!(
+        object(&b"\"That Seventies Show\"^^<http://www.w3.org/2001/XMLSchema#string>"[..]),
+        IResult::Done(&b""[..],Object::Literal{value:"That Seventies Show", datatype:"http://www.w3.org/2001/XMLSchema#string", language:""})
     );
 }
 #[test]
@@ -191,7 +232,7 @@ fn test_triple(){
         IResult::Done(&b""[..], MyTriple::new(
             Subject::AbsoluteUri("http://www.w3.org/2001/sw/RDFCore/ntriples/"),
             Predicate::AbsoluteUri("http://purl.org/dc/elements/1.1/creator"),
-            Object::Literal("Dave Beckett")
+            Object::Literal{value:"Dave Beckett",language:"",datatype:""}
         ))
     );
     assert_eq!(
@@ -199,7 +240,7 @@ fn test_triple(){
         IResult::Done(&b""[..], MyTriple::new(
             Subject::AbsoluteUri("http://www.w3.org/2001/sw/RDFCore/ntriples/"),
             Predicate::AbsoluteUri("http://purl.org/dc/elements/1.1/creator"),
-            Object::Literal("Dave Beckett")
+            Object::Literal{value:"Dave Beckett",language:"",datatype:""}
         ))
     );
     assert_eq!(
@@ -207,7 +248,23 @@ fn test_triple(){
         IResult::Done(&b""[..], MyTriple::new(
             Subject::AbsoluteUri("http://www.w3.org/2001/sw/RDFCore/ntriples/"),
             Predicate::AbsoluteUri("http://purl.org/dc/elements/1.1/creator"),
-            Object::Literal("Dave Beckett")
+            Object::Literal{value:"Dave Beckett",language:"",datatype:""}
+        ))
+    );
+    assert_eq!(
+        triple(&b"#Das ist ein Kommentar\n <http://www.w3.org/2001/sw/RDFCore/ntriples/>    <http://purl.org/dc/elements/1.1/creator> \"That Seventies Show\"^^<http://www.w3.org/2001/XMLSchema#string> ."[..]),
+        IResult::Done(&b""[..], MyTriple::new(
+            Subject::AbsoluteUri("http://www.w3.org/2001/sw/RDFCore/ntriples/"),
+            Predicate::AbsoluteUri("http://purl.org/dc/elements/1.1/creator"),
+            Object::Literal{value:"That Seventies Show",language:"",datatype:"http://www.w3.org/2001/XMLSchema#string"}
+        ))
+    );
+    assert_eq!(
+        triple(&b"#Das ist ein Kommentar\n <http://www.w3.org/2001/sw/RDFCore/ntriples/>    <http://purl.org/dc/elements/1.1/creator> \"That Seventies Show\"@en ."[..]),
+        IResult::Done(&b""[..], MyTriple::new(
+            Subject::AbsoluteUri("http://www.w3.org/2001/sw/RDFCore/ntriples/"),
+            Predicate::AbsoluteUri("http://purl.org/dc/elements/1.1/creator"),
+            Object::Literal{value:"That Seventies Show",language:"en",datatype:""}
         ))
     );
 }
